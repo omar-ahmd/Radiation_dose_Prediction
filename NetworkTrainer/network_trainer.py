@@ -9,9 +9,6 @@ import wandb
 import random
 
 
-
-
-
 class TrainerSetting:
     def __init__(self):
         self.project_name = None
@@ -20,7 +17,7 @@ class TrainerSetting:
 
         # Generally only use one of them
         self.max_iter = 99999999
-        self.max_epoch = 14
+        self.max_epoch = 20
 
         # Default not use this,
         # because the models of "best_train_loss", "best_val_evaluation_index", "latest" have been saved.
@@ -30,24 +27,28 @@ class TrainerSetting:
         self.network = None
         self.device = None
         self.list_GPU_ids = None
+        self.EMA = None
+        self.ema_network = None
 
         self.train_loader = None
         self.val_loader = None
+        self.wandb = False
+        self.is_GAN = False
+        self.weighted_loss = False
 
         self.optimizer = None
         self.lr_scheduler = None
         self.lr_scheduler_type = None
 
         # Default update learning rate after each epoch
-        self.lr_scheduler_update_on_iter = False
+        self.lr_scheduler_update_on_iter = True
 
         self.loss_function = None
         self.loss_function1 = None
 
-        self.weights = torch.asarray([0.2,0.8])
+        self.weights = torch.asarray([0.3,0.7])
         # If do online evaluation during validation
         self.online_evaluation_function_val = None
-
 
 class TrainerLog:
     def __init__(self):
@@ -82,7 +83,6 @@ class TrainerLog:
         # Save status of the trainer, eg. best_train_loss, latest, best_val_evaluation_index
         self.save_status = []
 
-
 class TrainerTime:
     def __init__(self):
         self.train_time_per_epoch = 0.
@@ -95,25 +95,11 @@ class TrainerTime:
         self.val_time_per_epoch = 0.
         self.val_loader_time_per_epoch = 0.
 
-
 class NetworkTrainer:
     def __init__(self):
         self.log = TrainerLog()
         self.setting = TrainerSetting()
         self.time = TrainerTime()
-        # start a new wandb run to track this script
-        wandb.init(
-            # set the wandb project where this run will be logged
-            project="Radiation Dose Prediction",
-            
-            # track hyperparameters and run metadata
-            config={
-            "learning_rate": 0.02,
-            "architecture": "DCNN",
-            "dataset": "OpenKBP",
-            "epochs": 30,
-            }
-        )
 
     def set_GPU_device(self, list_GPU_ids):
         self.setting.list_GPU_ids = list_GPU_ids
@@ -128,7 +114,7 @@ class NetworkTrainer:
         else:
             self.setting.device = torch.device('cuda:' + str(list_GPU_ids[0]))
             self.setting.network = nn.DataParallel(self.setting.network, device_ids=list_GPU_ids)
-        self.setting.network.to(self.setting.device)
+        
 
     def set_optimizer(self, optimizer_type, args):
         # Sometimes we need set different learning rates for "encoder" and "decoder" separately
@@ -144,6 +130,23 @@ class NetworkTrainer:
                     amsgrad=True)
             else:
                 self.setting.optimizer = optim.Adam(self.setting.network.parameters(),
+                                                    lr=args['lr'],
+                                                    weight_decay=3e-5,
+                                                    betas=(0.9, 0.999),
+                                                    eps=1e-08,
+                                                    amsgrad=True)
+        elif optimizer_type == 'AdamW':
+            if hasattr(self.setting.network, 'decoder') and hasattr(self.setting.network, 'encoder'):
+                self.setting.optimizer = optim.AdamW([
+                    {'params': self.setting.network.encoder.parameters(), 'lr': args['lr_encoder']},
+                    {'params': self.setting.network.decoder.parameters(), 'lr': args['lr_decoder']}
+                ],
+                    weight_decay=args['weight_decay'],
+                    betas=(0.9, 0.999),
+                    eps=1e-08,
+                    amsgrad=True)
+            else:
+                self.setting.optimizer = optim.AdamW(self.setting.network.parameters(),
                                                     lr=args['lr'],
                                                     weight_decay=3e-5,
                                                     betas=(0.9, 0.999),
@@ -238,8 +241,16 @@ class NetworkTrainer:
         # Forward
         if phase == 'train':
             self.setting.optimizer.zero_grad()
+            output = self.setting.network(input_)
+        else:
+            if self.setting.EMA is None:
+                output = self.setting.network(input_)
+            else:
+                self.setting.ema_network.eval()
+                output = self.setting.ema_network(input_)
+        
 
-        output = self.setting.network(input_)
+        
 
         return output
 
@@ -252,7 +263,7 @@ class NetworkTrainer:
         self.time.train_loader_time_per_epoch += time.time() - time_start_load_data
 
         # Optimize
-        loss = self.setting.loss_function(output, target)#, clas, weights)
+        loss = self.setting.loss_function(output, target, clas, weights)
         loss.backward()
         self.setting.optimizer.step()
 
@@ -288,9 +299,130 @@ class NetworkTrainer:
             output = self.forward(input_, phase='train')
 
             # Backward
-            loss = self.backward(output, target)#, clas, weights)
+            if self.setting.weighted_loss:
+                loss = self.backward(output, target, clas, weights)
+            else:
+                loss = self.backward(output, target)#, clas, weights)
 
             loss_unweighted = self.setting.loss_function1(output, target)
+            
+            # Used for counting average loss of this epoch
+            sum_train_loss += loss.item()
+            sum_train_uloss += loss_unweighted.item()
+            count_iter += 1
+
+            self.update_moving_train_loss(loss)
+            self.update_moving_train_uloss(loss_unweighted)
+            if self.log.iter % 100 == 0 and self.setting.wandb:    
+                wandb.log({"Train loss": self.log.moving_train_loss})
+                wandb.log({"Train uloss": self.log.moving_train_uloss})
+            
+            self.update_lr()
+            # Print loss during the first epoch
+            if self.log.epoch == 0:
+                if self.log.iter % 100 == 0:
+                    self.print_log_to_file('                Iter %12d       %12.5f\n   %12.5f\n' %
+                                           (self.log.iter, 
+                                           self.log.moving_train_loss, 
+                                           self.log.moving_train_uloss), 'a')
+            if self.setting.EMA is not None:
+                self.setting.EMA.step_ema(self.setting.ema_network, 
+                                        self.setting.network)
+                                 
+    
+            time_start_load_data = time.time()
+
+        if count_iter > 0:
+            average_loss = sum_train_loss / count_iter
+            average_uloss = sum_train_uloss / count_iter
+            self.update_average_statistics(average_loss, average_uloss, phase='train')
+            print(f"Training loss {average_loss}")
+
+
+        self.time.train_time_per_epoch = time.time() - time_start_train
+    
+    def train_GAN(self):
+        time_start_train = time.time()
+
+        self.setting.network.train()
+        self.setting.Discriminator.train()
+
+        weights=self.setting.weights.to(self.setting.device)
+        sum_train_loss = 0.
+        sum_train_uloss = 0.
+        count_iter = 0
+
+        time_start_load_data = time.time()
+        for batch_idx, list_loader_output in tqdm(enumerate(self.setting.train_loader)):
+            
+            if (self.setting.max_iter is not None) and (self.log.iter >= self.setting.max_iter - 1):
+                break
+            self.log.iter += 1
+
+            # List_loader_output[0] default as the input
+            input_ = list_loader_output[0]['data'][0]
+            target = list_loader_output[0]['data'][1:]
+            clas = list_loader_output[0]['clas']
+            
+
+            ############################
+            # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
+            ###########################
+            ## Train with all-real batch
+            self.setting.Discriminator.zero_grad()
+            # Format batch
+            real_cpu = target[0].to(self.setting.device)
+            b_size = real_cpu.size(0)
+            label = torch.full((b_size,), 1, dtype=torch.float, device=self.setting.device)
+            # Forward pass real batch through D
+            output = self.setting.Discriminator(real_cpu).view(-1)
+            # Calculate loss on all-real batch
+            errD_real = self.setting.criterion(output, label)
+            # Calculate gradients for D in backward pass
+            errD_real.backward()
+            D_x = output.mean().item()
+
+            ## Train with all-fake batch
+            # Generate fake image batch with G
+            fake = self.forward(input_, phase='val')
+            label.fill_(0)
+            # Classify all fake batch with D
+            output = self.setting.Discriminator(fake[0]).view(-1)
+            # Calculate D's loss on the all-fake batch
+            errD_fake = self.setting.criterion(output, label)
+            # Calculate the gradients for this batch, accumulated (summed) with previous gradients
+            errD_fake.backward()
+            D_G_z1 = output.mean().item()
+            # Compute error of D as sum over the fake and the real batches
+            errD = errD_real + errD_fake
+            # Update D
+            
+            self.setting.optimizerD.step()
+
+
+            ############################
+            # (2) Update G network: maximize log(D(G(z)))
+            ###########################
+            label.fill_(1)  # fake labels are real for generator cost
+            # Record time of preparing data
+            self.time.train_loader_time_per_epoch += time.time() - time_start_load_data
+
+            # Forward
+            fake = self.forward(input_, phase='train')
+
+            # Since we just updated D, perform another forward pass of all-fake batch through D
+            output = self.setting.Discriminator(fake[0]).view(-1)
+            # Backward
+            # Calculate G's loss based on this output
+            if self.setting.weighted_loss:
+                loss = self.backward(output, target, clas, weights)
+            else:
+                loss = self.backward(output, target)#, clas, weights)
+            # Update G
+            self.setting.optimizer.step()
+
+
+            loss_unweighted = self.setting.loss_function1(fake, target)
             
             # Used for counting average loss of this epoch
             sum_train_loss += loss.item()
@@ -311,8 +443,7 @@ class NetworkTrainer:
                                            (self.log.iter, 
                                            self.log.moving_train_loss, 
                                            self.log.moving_train_uloss), 'a')
-                        # log ulosss to wandb
-                    
+                                 
     
 
 
@@ -322,11 +453,11 @@ class NetworkTrainer:
             average_loss = sum_train_loss / count_iter
             average_uloss = sum_train_uloss / count_iter
             self.update_average_statistics(average_loss, average_uloss, phase='train')
-            
             print(f"Training loss {average_loss}")
 
+
         self.time.train_time_per_epoch = time.time() - time_start_train
-    
+
     def val(self):
 
         self.setting.network.eval()
@@ -347,8 +478,10 @@ class NetworkTrainer:
             # Backward
             for target_i in range(len(target)):
                 target[target_i] = target[target_i].to(self.setting.device)
-
-            loss = self.setting.loss_function(output, target)#, clas, weights)
+            if self.setting.weighted_loss:
+                loss = self.setting.loss_function(output, target, clas, weights)
+            else:
+                loss = self.setting.loss_function(output, target)#, clas, weights)
             
             uloss = self.setting.loss_function1(output, target)
             mask = list_loader_output[0]['data'][2][0][0]
@@ -362,12 +495,26 @@ class NetworkTrainer:
             average_loss = sum_val_loss / count_iter
             average_uloss = sum_val_uloss / count_iter
             self.update_average_statistics(average_loss, average_uloss, phase='val')
-            wandb.log({"Validation loss": average_loss})
-            wandb.log({"Validation uloss": average_uloss})
+            if self.setting.wandb: 
+                wandb.log({"Validation loss": average_loss})
+                wandb.log({"Validation uloss": average_uloss})
             print(f"validation loss {average_loss}, validation uloss {average_uloss} ")
 
     def run(self):
-
+        if self.setting.wandb:
+            # start a new wandb run to track this script
+            wandb.init(
+                # set the wandb project where this run will be logged
+                project="Radiation Dose Prediction",
+                
+                # track hyperparameters and run metadata
+                config={
+                "learning_rate": 0.02,
+                "architecture": "DCNN",
+                "dataset": "OpenKBP",
+                "epochs": 30,
+                }
+            )
         
         if self.log.iter == -1:
             self.print_log_to_file('Start training !\n', 'w')
@@ -389,7 +536,13 @@ class NetworkTrainer:
             self.log.list_lr_associate_iter.append([self.setting.optimizer.param_groups[0]['lr'], self.log.iter])
 
             self.time.__init__()
-            self.train()
+            if self.log.epoch==0:
+                self.val()
+            if self.setting.is_GAN:
+                self.train_GAN()
+            else:
+                self.train()
+            
             self.val()
 
             # If update learning rate per epoch
@@ -459,7 +612,6 @@ class NetworkTrainer:
 
         torch.save(ckpt, self.setting.output_dir + '/' + status + '.pkl')
         self.print_log_to_file('        ==> Saving ' + status + ' model successfully !\n', 'a')
-
     # Default load trainer in cpu, please reset device using the function self.set_GPU_device
     def init_trainer(self, ckpt_file, list_GPU_ids, only_network=True):
         ckpt = torch.load(ckpt_file, map_location='cpu')
@@ -482,3 +634,4 @@ class NetworkTrainer:
                 key[1]['max_exp_avg_sq'] = key[1]['max_exp_avg_sq'].to(self.setting.device)
 
         self.print_log_to_file('==> Init trainer from ' + ckpt_file + ' successfully! \n', 'a')
+

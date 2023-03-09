@@ -30,12 +30,13 @@ def read_data(patient_dir):
     return dict_images
 
 
-def pre_processing(dict_images):
+def pre_processing(dict_images, with_distance=True):
 
     # CT image
     CT = dict_images['ct']
     CT = np.clip(CT, a_min=-1024, a_max=1500)
     CT = CT.astype(np.float32) / 1000.
+    
 
     # Dose
     dose = dict_images['dose']# / 70.
@@ -56,15 +57,20 @@ def pre_processing(dict_images):
     PTVs = 70.0 / 70. * PTVs[2] \
         + 63.0 / 70. * PTVs[1] \
         + 56.0 / 70. * PTVs[0]
+    if with_distance:
+        distance_image = get_distance_image(PTVs)[None]
+        
+        list_images = [np.concatenate((PTVs[None], OAR_all, CT[None], distance_image), axis=0),  # Input
+                    dose[None],  # Label
+                    possible_dose_mask[None],
+                    structure_masks]
+    else:
+        list_images = [np.concatenate((PTVs[None], OAR_all, CT[None]), axis=0),  # Input
+                    dose[None],  # Label
+                    possible_dose_mask[None],
+                    structure_masks]
 
-    distance_image = get_distance_image(PTVs)[None]
-    
-    list_images = [np.concatenate((PTVs[None], OAR_all, CT[None], distance_image), axis=0),  # Input
-                   dose[None],  # Label
-                   possible_dose_mask[None],
-                   structure_masks]
-
-    #list_images = [np.concatenate((structure_masks, CT[None]), axis=0),  # Input
+    #list_images = [np.concatenate((OAR_all, CT[None]), axis=0),  # Input
     #               dose[None],  # Label
     #               possible_dose_mask[None]]
 
@@ -111,13 +117,34 @@ def get_distance_image(mask):
 
 class MyDataset(data.Dataset):
 
-    def __init__(self, num_samples_per_epoch, phase):
+    def __init__(self, num_samples_per_epoch,
+                phase, resplit=False,
+                train_size=0.9, 
+                seed=10, 
+                with_miss_PTVs=True,
+                with_distance=True):
         self.phase = phase
+        self.with_miss_PTVs = with_miss_PTVs
         self.num_samples_per_epoch = num_samples_per_epoch
+        self.with_distance = with_distance
         self.transform = {'train': train_transform, 'val': val_transform, 'test': val_transform}
-        self.list_case_id = {'train': [a[0] for a in os.walk('data/train/') if 'sample' in a[0]],
-                             'val': [a[0] for a in os.walk('data/validation/') if 'sample' in a[0]],
-                             'test': [a[0] for a in os.walk('data/test/') if 'sample' in a[0]]}[phase]
+        if resplit:
+            def condition(b):
+                return 'sample' in b and ('train' in b or 'val' in b)
+            train_val = [a[0] for a in os.walk('data/') if condition(a[0])]
+            random.seed(seed)
+            random.shuffle(train_val)
+            length = len(train_val)
+            split = int(length*train_size)
+
+            self.list_case_id = {'train': train_val[:split],
+                                'val': train_val[split:],
+                                'test': [a[0] for a in os.walk('data/test/') if 'sample' in a[0]]}[phase]
+        else:
+            self.list_case_id = {'train': [a[0] for a in os.walk('data/train/') if 'sample' in a[0]],
+                                'val': [a[0] for a in os.walk('data/validation/') if 'sample' in a[0]],
+                                'test': [a[0] for a in os.walk('data/test/') if 'sample' in a[0]]}[phase]
+            
         if phase=='train':
             random.shuffle(self.list_case_id)
         self.sum_case = len(self.list_case_id)
@@ -133,11 +160,13 @@ class MyDataset(data.Dataset):
         # Randomly pick a slice as input
 
         dict_images = read_data(case_id)
-        list_images = pre_processing(dict_images)
+        list_images = pre_processing(dict_images, with_distance=self.with_distance)
         if self.phase=='train' and \
-        (list_images[2][0, :, :].sum()==0):# or list_images[0][0, :, :].sum()==0 or list_images[0][1, :, :].sum()==0 ):
-            
-            return self.__getitem__(np.random.randint(self.__len__()))
+        (list_images[2][0, :, :].sum()==0 or list_images[0][0, :, :].sum()==0):
+            if list_images[2][0, :, :].sum()==0:
+                return self.__getitem__(np.random.randint(self.__len__()))
+            if list_images[0][0, :, :].sum()==0 and not self.with_miss_PTVs:
+                return self.__getitem__(np.random.randint(self.__len__()))
 
         list_images = self.transform[self.phase](list_images)
         
@@ -149,31 +178,6 @@ class MyDataset(data.Dataset):
             else:
                 return {'data' : list_images, 'clas': 1}, case_id
     
-    
-    #def __getitem__(self, index_):
-    #    
-    #    if index_ <= self.sum_case - 1:
-    #        case_id = self.list_case_id[index_]
-    #    else:
-    #        new_index_ = index_ - (index_ // self.sum_case) * self.sum_case
-    #        case_id = self.list_case_id[new_index_]
-#
-    #    # Randomly pick a slice as input
-#
-    #    dict_images = read_data(case_id)
-    #    list_images = pre_processing(dict_images)
-    #    if self.phase!='test'  and (list_images[2][0, :, :].sum()==0):
-    #        return self.__getitem__(np.random.randint(self.__len__()))
-    #    elif self.phase!='test':
-    #        list_images = self.transform[self.phase](list_images)
-    #        if list_images[0][0, :, :].sum()==0 or list_images[0][1, :, :].sum()==0:
-    #            return {'data' : list_images, 'clas': 0}, case_id
-    #        else:
-    #            return {'data' : list_images, 'clas': 1}, case_id
-#
-    #    list_images = self.transform[self.phase](list_images)
-        
-    #    return list_images, case_id
 
     def __len__(self):
         return self.num_samples_per_epoch
@@ -185,12 +189,33 @@ def get_loader(train_bs=1,
                 train_num_samples_per_epoch=1, 
                 val_num_samples_per_epoch=1, 
                 test_num_samples_per_epoch=1, 
-                num_works=0):
+                num_works=0, 
+                resplit=True,
+                seed=10,
+                with_miss_PTVs=True,
+                with_distance=True):
 
 
-    train_dataset = MyDataset(num_samples_per_epoch=train_num_samples_per_epoch, phase='train')
-    val_dataset = MyDataset(num_samples_per_epoch=val_num_samples_per_epoch, phase='val')
-    test_dataset = MyDataset(num_samples_per_epoch=test_num_samples_per_epoch, phase='test')
+    train_dataset = MyDataset(num_samples_per_epoch=train_num_samples_per_epoch,
+                            phase='train', 
+                            resplit=resplit, 
+                            seed=seed,
+                            with_miss_PTVs=with_miss_PTVs,
+                            with_distance=with_distance)
+
+
+    val_dataset = MyDataset(num_samples_per_epoch=val_num_samples_per_epoch,
+                            phase='val', 
+                            resplit=resplit,  
+                            seed=seed,
+                            with_miss_PTVs=with_miss_PTVs,
+                            with_distance=with_distance)
+    test_dataset = MyDataset(num_samples_per_epoch=test_num_samples_per_epoch,
+                            phase='test', 
+                            resplit=resplit,  
+                            seed=seed,
+                            with_miss_PTVs=with_miss_PTVs,
+                            with_distance=with_distance)
 
     train_loader = data.DataLoader(dataset=train_dataset, batch_size=train_bs, shuffle=True, num_workers=num_works,
                                    pin_memory=False)
