@@ -17,7 +17,7 @@ class TrainerSetting:
 
         # Generally only use one of them
         self.max_iter = 99999999
-        self.max_epoch = 20
+        self.max_epoch = 40
 
         # Default not use this,
         # because the models of "best_train_loss", "best_val_evaluation_index", "latest" have been saved.
@@ -27,8 +27,6 @@ class TrainerSetting:
         self.network = None
         self.device = None
         self.list_GPU_ids = None
-        self.EMA = None
-        self.ema_network = None
 
         self.train_loader = None
         self.val_loader = None
@@ -121,8 +119,8 @@ class NetworkTrainer:
         if optimizer_type == 'Adam':
             if hasattr(self.setting.network, 'decoder') and hasattr(self.setting.network, 'encoder'):
                 self.setting.optimizer = optim.Adam([
-                    {'params': self.setting.network.encoder.parameters(), 'lr': args['lr_encoder']},
-                    {'params': self.setting.network.decoder.parameters(), 'lr': args['lr_decoder']}
+                    {'params': self.setting.network.encoder.parameters(), 'lr': args['lr_encoder'], 'initial_lr': args['lr_encoder']},
+                    {'params': self.setting.network.decoder.parameters(), 'lr': args['lr_decoder'], 'initial_lr': args['lr_decoder']}
                 ],
                     weight_decay=args['weight_decay'],
                     betas=(0.9, 0.999),
@@ -130,6 +128,13 @@ class NetworkTrainer:
                     amsgrad=True)
             else:
                 self.setting.optimizer = optim.Adam(self.setting.network.parameters(),
+                                                    lr=args['lr'],
+                                                    weight_decay=3e-5,
+                                                    betas=(0.9, 0.999),
+                                                    eps=1e-08,
+                                                    amsgrad=True)
+            if self.setting.is_GAN:
+                self.setting.optimizerD = optim.Adam(self.setting.Discriminator.parameters(),
                                                     lr=args['lr'],
                                                     weight_decay=3e-5,
                                                     betas=(0.9, 0.999),
@@ -159,8 +164,12 @@ class NetworkTrainer:
             self.setting.lr_scheduler = optim.lr_scheduler.MultiStepLR(self.setting.optimizer,
                                                                        milestones=args['milestones'],
                                                                        gamma=args['gamma'],
-                                                                       last_epoch=args['last_epoch']
-                                                                       )
+                                                                       last_epoch=args['last_epoch'])
+        elif lr_scheduler_type == 'exp':
+            self.setting.lr_scheduler_type = 'exp'
+            self.setting.lr_scheduler = optim.lr_scheduler.ExponentialLR(self.setting.optimizer,
+                                                                            gamma=args['gamma'],
+                                                                            last_epoch=args['last_epoch'])    
         elif lr_scheduler_type == 'cosine':
             self.setting.lr_scheduler_type = 'cosine'
             self.setting.lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(self.setting.optimizer,
@@ -195,7 +204,8 @@ class NetworkTrainer:
             self.log.moving_train_loss = \
                 (1 - self.setting.eps_train_loss) * self.log.moving_train_loss \
                 + self.setting.eps_train_loss * loss.item()
-    
+
+ 
     def update_moving_train_uloss(self, loss):
 
         if self.log.moving_train_uloss is None:
@@ -243,14 +253,8 @@ class NetworkTrainer:
             self.setting.optimizer.zero_grad()
             output = self.setting.network(input_)
         else:
-            if self.setting.EMA is None:
-                output = self.setting.network(input_)
-            else:
-                self.setting.ema_network.eval()
-                output = self.setting.ema_network(input_)
-        
-
-        
+            output = self.setting.network(input_)
+    
 
         return output
 
@@ -325,16 +329,15 @@ class NetworkTrainer:
                                            (self.log.iter, 
                                            self.log.moving_train_loss, 
                                            self.log.moving_train_uloss), 'a')
-            if self.setting.EMA is not None:
-                self.setting.EMA.step_ema(self.setting.ema_network, 
-                                        self.setting.network)
                                  
     
             time_start_load_data = time.time()
+            
 
         if count_iter > 0:
             average_loss = sum_train_loss / count_iter
             average_uloss = sum_train_uloss / count_iter
+            
             self.update_average_statistics(average_loss, average_uloss, phase='train')
             print(f"Training loss {average_loss}")
 
@@ -415,9 +418,9 @@ class NetworkTrainer:
             # Backward
             # Calculate G's loss based on this output
             if self.setting.weighted_loss:
-                loss = self.backward(output, target, clas, weights)
+                loss = self.backward(fake, target, clas, weights)
             else:
-                loss = self.backward(output, target)#, clas, weights)
+                loss = self.backward(fake, target)#, clas, weights)
             # Update G
             self.setting.optimizer.step()
 
@@ -431,7 +434,7 @@ class NetworkTrainer:
 
             self.update_moving_train_loss(loss)
             self.update_moving_train_uloss(loss_unweighted)
-            if self.log.iter % 100 == 0:    
+            if self.log.iter % 100 == 0 and self.setting.wandb:    
                 wandb.log({"Train loss": self.log.moving_train_loss})
                 wandb.log({"Train uloss": self.log.moving_train_uloss})
             
@@ -484,7 +487,7 @@ class NetworkTrainer:
                 loss = self.setting.loss_function(output, target)#, clas, weights)
             
             uloss = self.setting.loss_function1(output, target)
-            mask = list_loader_output[0]['data'][2][0][0]
+
             #if (mask>0).sum()!=0:
             # Used for counting average loss of this epoch
             sum_val_loss += loss.item()
@@ -500,22 +503,7 @@ class NetworkTrainer:
                 wandb.log({"Validation uloss": average_uloss})
             print(f"validation loss {average_loss}, validation uloss {average_uloss} ")
 
-    def run(self):
-        if self.setting.wandb:
-            # start a new wandb run to track this script
-            wandb.init(
-                # set the wandb project where this run will be logged
-                project="Radiation Dose Prediction",
-                
-                # track hyperparameters and run metadata
-                config={
-                "learning_rate": 0.02,
-                "architecture": "DCNN",
-                "dataset": "OpenKBP",
-                "epochs": 30,
-                }
-            )
-        
+    def run(self):        
         if self.log.iter == -1:
             self.print_log_to_file('Start training !\n', 'w')
         else:
@@ -536,8 +524,9 @@ class NetworkTrainer:
             self.log.list_lr_associate_iter.append([self.setting.optimizer.param_groups[0]['lr'], self.log.iter])
 
             self.time.__init__()
-            if self.log.epoch==0:
-                self.val()
+            #if self.log.epoch==0:
+            #    self.val()
+                
             if self.setting.is_GAN:
                 self.train_GAN()
             else:
@@ -634,4 +623,6 @@ class NetworkTrainer:
                 key[1]['max_exp_avg_sq'] = key[1]['max_exp_avg_sq'].to(self.setting.device)
 
         self.print_log_to_file('==> Init trainer from ' + ckpt_file + ' successfully! \n', 'a')
+
+
 

@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 import sys
+sys.path.append('./DCNN')
 from transformer import PixelwiseViT
-
+import torch.nn.functional as F
 
 # Number of channels in the training images. For color images this is 3
 nc = 1
@@ -14,14 +15,21 @@ ndf = 128
 
 
 class SingleConv(nn.Module):
-    def __init__(self, in_ch, out_ch, kernel_size, stride, padding):
+    def __init__(self, in_ch, out_ch, kernel_size, stride, padding, with_dropout=False):
         super(SingleConv, self).__init__()
-
-        self.single_conv = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, kernel_size=kernel_size, padding=padding, stride=stride, bias=False),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True)
-        )
+        if with_dropout:
+            self.single_conv = nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, kernel_size=kernel_size, padding=padding, stride=stride, bias=False),
+                nn.Dropout(0.02),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True)
+            )
+        else:
+            self.single_conv = nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, kernel_size=kernel_size, padding=padding, stride=stride, bias=False),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True)
+            )
 
     def forward(self, x):
         return self.single_conv(x)
@@ -82,26 +90,26 @@ class DenseFeaureAggregation(nn.Module):
         return out_
 
 class Encoder(nn.Module):
-    def __init__(self, in_ch, list_ch, bottleneck='DFA'):
+    def __init__(self, in_ch, list_ch, bottleneck='DFA', with_dropout=False):
         super(Encoder, self).__init__()
         self.encoder_1 = nn.Sequential(
             SingleConv(in_ch, list_ch[1], kernel_size=3, stride=1, padding=1),
-            SingleConv(list_ch[1], list_ch[1], kernel_size=3, stride=1, padding=1)
+            SingleConv(list_ch[1], list_ch[1], kernel_size=3, stride=1, padding=1, with_dropout=with_dropout)
         )
         self.encoder_2 = nn.Sequential(
             nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
             SingleConv(list_ch[1], list_ch[2], kernel_size=3, stride=1, padding=1),
-            SingleConv(list_ch[2], list_ch[2], kernel_size=3, stride=1, padding=1)
+            SingleConv(list_ch[2], list_ch[2], kernel_size=3, stride=1, padding=1, with_dropout=with_dropout)
         )
         self.encoder_3 = nn.Sequential(
             nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
             SingleConv(list_ch[2], list_ch[3], kernel_size=3, stride=1, padding=1),
-            SingleConv(list_ch[3], list_ch[3], kernel_size=3, stride=1, padding=1)
+            SingleConv(list_ch[3], list_ch[3], kernel_size=3, stride=1, padding=1, with_dropout=with_dropout)
         )
         self.encoder_4 = nn.Sequential(
             nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
             SingleConv(list_ch[3], list_ch[4], kernel_size=3, stride=1, padding=1),
-            SingleConv(list_ch[4], list_ch[4], kernel_size=3, stride=1, padding=1)
+            SingleConv(list_ch[4], list_ch[4], kernel_size=3, stride=1, padding=1, with_dropout=with_dropout)
         )
 
         if bottleneck=='DFA':
@@ -118,31 +126,39 @@ class Encoder(nn.Module):
         out_encoder_4 = self.encoder_4(out_encoder_3)
         if not self.DFA is None:
             out_encoder_4 = self.DFA(out_encoder_4)
+
         return [out_encoder_1, out_encoder_2, out_encoder_3, out_encoder_4]
 
 class Decoder(nn.Module):
-    def __init__(self, out_ch, list_ch, Unet=True):
+    def __init__(self, out_ch, list_ch, Unet=True, with_dropout=False, PTV_estimator=False):
         super(Decoder, self).__init__()
         self.connect = Unet
+        self.PTV_estimator = PTV_estimator
 
         self.upconv_3_1 = nn.ConvTranspose2d(list_ch[4], list_ch[3], kernel_size=2, stride=2, bias=True)
         self.decoder_conv_3_1 = nn.Sequential(
             SingleConv(2 * list_ch[3], list_ch[3], kernel_size=3, stride=1, padding=1),
-            SingleConv(list_ch[3], list_ch[3], kernel_size=3, stride=1, padding=1)
+            SingleConv(list_ch[3], list_ch[3], kernel_size=3, stride=1, padding=1, with_dropout=with_dropout)
         )
         self.upconv_2_1 = nn.ConvTranspose2d(list_ch[3], list_ch[2], kernel_size=2, stride=2, bias=True)
         self.decoder_conv_2_1 = nn.Sequential(
             SingleConv(2 * list_ch[2], list_ch[2], kernel_size=3, stride=1, padding=1),
-            SingleConv(list_ch[2], list_ch[2], kernel_size=3, stride=1, padding=1)
+            SingleConv(list_ch[2], list_ch[2], kernel_size=3, stride=1, padding=1, with_dropout=with_dropout)
         )
         self.upconv_1_1 = nn.ConvTranspose2d(list_ch[2], list_ch[1], kernel_size=2, stride=2, bias=True)
         self.decoder_conv_1_1 = nn.Sequential(
             SingleConv(2 * list_ch[1], list_ch[1], kernel_size=3, stride=1, padding=1),
-            SingleConv(list_ch[1], list_ch[1], kernel_size=3, stride=1, padding=1)
+            SingleConv(list_ch[1], list_ch[1], kernel_size=3, stride=1, padding=1, with_dropout=with_dropout)
         )
-        self.conv_out = nn.Sequential(
-            nn.Conv2d(list_ch[1], out_ch, kernel_size=1, padding=0, bias=True)
-        )
+        if self.PTV_estimator:
+            self.conv_out = nn.Sequential(
+                nn.Conv2d(list_ch[1], out_ch, kernel_size=1)
+            )
+        else:
+            self.conv_out = nn.Sequential(
+                nn.Conv2d(list_ch[1], out_ch, kernel_size=1, padding=0, bias=True)
+            )
+
 
     def forward(self, out_encoder):
         out_encoder_1, out_encoder_2, out_encoder_3, out_encoder_4 = out_encoder
@@ -164,8 +180,12 @@ class Decoder(nn.Module):
             
             out_decoder_1_1 = self.upconv_1_1(out_decoder_2_1)
             
-
+        
         output = self.conv_out(out_decoder_1_1)
+        
+        if self.PTV_estimator:
+            output = F.softmax(output, dim=1)  # Use softmax activation for multi-class segmentation
+              
         return [output]
 
 class Decoder_sep(nn.Module):
@@ -207,12 +227,15 @@ class Decoder_sep(nn.Module):
         output = self.conv_out(out_decoder_1_1)
         return [output]
 
-
 class Model(nn.Module):
-    def __init__(self, in_ch, out_ch, list_ch, bottleneck='DFA', Unet=True):
+    def __init__(self, in_ch, out_ch, list_ch, 
+                bottleneck='DFA', 
+                Unet=True, 
+                with_dropout=False, 
+                PTV_estimator=False):
         super(Model, self).__init__()
-        self.encoder = Encoder(in_ch, list_ch, bottleneck)
-        self.decoder = Decoder(out_ch, list_ch, Unet=Unet)
+        self.encoder = Encoder(in_ch, list_ch, bottleneck, with_dropout=with_dropout)
+        self.decoder = Decoder(out_ch, list_ch, Unet=Unet, PTV_estimator=PTV_estimator)
 
         # init
         self.initialize()
@@ -245,10 +268,10 @@ class Model(nn.Module):
         return out_decoder
 
 class Model_sep(nn.Module):
-    def __init__(self, in_ch, out_ch, list_ch):
+    def __init__(self, in_ch, out_ch, list_ch, bottleneck='DFA'):
         super(Model_sep, self).__init__()
-        self.encoder_masks = Encoder(in_ch-1, list_ch)
-        self.encoder_ct = Encoder(1, list_ch)
+        self.encoder_masks = Encoder(in_ch-1, list_ch, bottleneck)
+        self.encoder_ct = Encoder(1, list_ch, bottleneck)
 
         self.decoder = Decoder_sep(out_ch, list_ch)
 
@@ -322,6 +345,30 @@ class Discriminator(nn.Module):
 
     def forward(self, input):
         return self.main(input)
+
+class Ensemble(nn.Module):
+    def __init__(self, models):
+        super(Ensemble, self).__init__()
+        self.models = models
+        self.freeze_models()
+        in_ch = len(models)
+        self.conv = nn.Sequential(
+            SingleConv(in_ch, 1, kernel_size=1, stride=1, padding=0)
+        )
+    def freeze_models(self):
+        for m in self.models:
+            for param in m.parameters():
+                param.requires_grad = False
+            m=m.eval()
+        
+    def forward(self, input):
+        models_outputs = []
+        for m in self.models:
+            models_outputs.append(m(input)[0])
+        models_out_concat = torch.cat(models_outputs, axis=1)
+        return torch.mean(models_out_concat, axis=1)
+
+
 
 class EMA:
     def __init__(self, beta):
