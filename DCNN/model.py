@@ -189,8 +189,9 @@ class Decoder(nn.Module):
         return [output]
 
 class Decoder_sep(nn.Module):
-    def __init__(self, out_ch, list_ch):
+    def __init__(self, out_ch, list_ch, Unet=True):
         super(Decoder_sep, self).__init__()
+        self.connect = Unet
 
         self.upconv_3_1 = nn.ConvTranspose2d(2*list_ch[4], 2*list_ch[3], kernel_size=2, stride=2, bias=True)
         self.decoder_conv_3_1 = nn.Sequential(
@@ -212,17 +213,24 @@ class Decoder_sep(nn.Module):
         )
 
     def forward(self, out_encoder):
+
         out_encoder_1, out_encoder_2, out_encoder_3, out_encoder_4 = out_encoder
-        
-        out_decoder_3_1 = self.decoder_conv_3_1(
-            torch.cat((self.upconv_3_1(out_encoder_4), out_encoder_3), dim=1)
-        )
-        out_decoder_2_1 = self.decoder_conv_2_1(
-            torch.cat((self.upconv_2_1(out_decoder_3_1), out_encoder_2), dim=1)
-        )
-        out_decoder_1_1 = self.decoder_conv_1_1(
-            torch.cat((self.upconv_1_1(out_decoder_2_1), out_encoder_1), dim=1)
-        )
+        if self.connect:
+            out_decoder_3_1 = self.decoder_conv_3_1(
+                torch.cat((self.upconv_3_1(out_encoder_4), out_encoder_3), dim=1)
+            )
+            out_decoder_2_1 = self.decoder_conv_2_1(
+                torch.cat((self.upconv_2_1(out_decoder_3_1), out_encoder_2), dim=1)
+            )
+            out_decoder_1_1 = self.decoder_conv_1_1(
+                torch.cat((self.upconv_1_1(out_decoder_2_1), out_encoder_1), dim=1)
+            )
+        else:
+            out_decoder_3_1 = self.upconv_3_1(out_encoder_4)
+            
+            out_decoder_2_1 = self.upconv_2_1(out_decoder_3_1)
+            
+            out_decoder_1_1 = self.upconv_1_1(out_decoder_2_1)
         
         output = self.conv_out(out_decoder_1_1)
         return [output]
@@ -268,12 +276,13 @@ class Model(nn.Module):
         return out_decoder
 
 class Model_sep(nn.Module):
-    def __init__(self, in_ch, out_ch, list_ch, bottleneck='DFA'):
+    def __init__(self, in_ch, out_ch, list_ch, bottleneck='DFA', Unet=True):
         super(Model_sep, self).__init__()
+        self.connect=Unet
         self.encoder_masks = Encoder(in_ch-1, list_ch, bottleneck)
         self.encoder_ct = Encoder(1, list_ch, bottleneck)
 
-        self.decoder = Decoder_sep(out_ch, list_ch)
+        self.decoder = Decoder_sep(out_ch, list_ch, Unet=self.connect)
 
         # init
         self.initialize()

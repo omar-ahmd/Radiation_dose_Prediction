@@ -23,8 +23,8 @@ if __name__ == '__main__':
                         help='Train with gan loss')
     parser.add_argument('--bottleneck', default='DFA',
                         help='DFA, Vit, None')                    
-    parser.add_argument('--loss', default='ROI_LOSS',
-                        help='ROI_LOSS, ROI_SM_LOSS, L1LOSS')
+    parser.add_argument('--loss', default='ROI',
+                        help='ROI, ROI_SM, L1')
     parser.add_argument('--weighted', default=False, action='store_true',
                         help="give more weights to the samples that don't have ptvs")
     parser.add_argument('--output_path', default='Output',
@@ -58,16 +58,22 @@ if __name__ == '__main__':
     trainer.setting.project_name = args.model
     bott=''
     ptv_estimate=''
-    if args.bottleneck!='DFA':
-        bott = '_'+args.bottleneck
+    gan='_'
+    bott = '_'+args.bottleneck
     if args.PTV_estimate:
         ptv_estimate='_ptv1'
     if args.without_distance:
         ptv_estimate='wod'
-    trainer.setting.output_dir = args.output_path + '/' + args.model + bott + '_' + str(args.split_seed) + '_' + args.loss + ptv_estimate
+    if args.GAN:
+        gan='_GAN'
+
+    trainer.setting.output_dir = args.output_path + '/' + \
+                                    args.model + gan + bott +\
+                                    '_' + args.loss + ptv_estimate
 
     if not os.path.exists(trainer.setting.output_dir):
         os.mkdir(trainer.setting.output_dir)
+    
     if args.split_seed is None:
         resplit = False
         args.split_seed = -1
@@ -93,21 +99,23 @@ if __name__ == '__main__':
             "with_dropout": True,
             }
         )
+    
     trainer.setting.wandb = args.wandb
     list_GPU_ids = args.list_GPU_ids
     trainer.set_GPU_device(list_GPU_ids)
     trainer.setting.max_epoch=args.epochs
+
     if args.without_distance:
         in_ch=3
         out_ch=1
     elif args.PTV_estimate: 
         in_ch=2
         out_ch=5
-        trainer.setting.loss_function = PTV_estimator_loss(weights=torch.tensor([1,1,1,1,0]).to(trainer.setting.device))
     else:
         in_ch=4
         out_ch=1
 
+    #Models
     if args.model=='AUTOENC':
         trainer.setting.network = Model(in_ch=in_ch, out_ch=out_ch,
                                         list_ch=[-1, 32, 64, 128, 256], 
@@ -123,9 +131,11 @@ if __name__ == '__main__':
                                         PTV_estimator=args.PTV_estimate)
         args.model = args.model + '_' + args.bottleneck
     elif args.model=='DCNN-2ENC':
-        
         trainer.setting.network = Model_sep(in_ch=in_ch, out_ch=out_ch,
                                         list_ch=[-1, 32, 64, 128, 256], bottleneck=args.bottleneck)
+    elif args.model=='DCNN-2ENC-AUTO':
+        trainer.setting.network = Model_sep(in_ch=in_ch, out_ch=out_ch,
+                                        list_ch=[-1, 32, 64, 128, 256], bottleneck=args.bottleneck, Unet=False)
     elif args.model=='ENSEMBLE':
         paths=['Output/DCNN_Vit_None_L1LOSS/best_val_evaluation_uloss.pkl',
                 'Output/DCNN_Vit_None_ROI_SM_LOSS/best_val_evaluation_uloss.pkl',
@@ -166,19 +176,22 @@ if __name__ == '__main__':
         total_params  = sum(p.numel() for p in trainer.setting.network.parameters() if p.requires_grad)
         print(total_params)
 
-
+    #Loss function
     if args.GAN:
         trainer.setting.is_GAN = True
         trainer.setting.Discriminator = Discriminator(1).to(trainer.setting.device)
         trainer.setting.criterion = nn.BCELoss()
-
     if not args.PTV_estimate:
-        if args.loss=='ROI_LOSS':
+        if args.loss=='ROI':
             trainer.setting.loss_function = Loss_ROI()
-        elif args.loss=='ROI_SM_LOSS':
+        elif args.loss=='ROI_SM':
             trainer.setting.loss_function = Loss_SM_ROI()
-        elif args.loss=='L1LOSS':
+        elif args.loss=='L1':
             trainer.setting.loss_function = L1Loss()
+    else:
+        trainer.setting.loss_function = PTV_estimator_loss(weights=torch.tensor([1,1,1,1,0])\
+                                            .to(trainer.setting.device))
+
     
 
     

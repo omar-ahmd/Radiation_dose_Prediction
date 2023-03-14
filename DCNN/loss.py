@@ -129,34 +129,6 @@ class Loss_SM_ROI(nn.Module):
                 else:
                     L1_loss += weights[i]*self.L1_loss_func(torch.zeros(2),torch.zeros(2))
 
-#class PTV_estimator_loss(nn.Module):
-#    '''
-#    sum of the ROI loss and a loss of the MAE of the dose in the structure masks(SM)
-#    '''
-#    
-#    def __init__(self, weights=None):
-#        super().__init__()
-#        self.loss = nn.CrossEntropyLoss(reduction='mean', weight=weights)
-#        self.sl1 = nn.L1Loss()
-#
-#    def forward(self, pred, gt, clas=None, weights=None):
-#        possible_dose_mask = gt[1]
-#    
-#        if possible_dose_mask.sum()>0:
-#            #pred_dose = pred[0].reshape(pred[0].shape[0], 4, -1)
-#            #gt_ptv = gt[0].reshape(gt[0].shape[0], 4, -1)
-#
-#            #possible_dose_mask = possible_dose_mask.reshape(possible_dose_mask.shape[0], 1, -1)                 
-#            pdmloss = self.loss(pred[0], gt[0])    # (bs)
-#            print(pred[0].shape)
-#            print(gt[0].shape)
-#
-#            
-#
-#            return pdmloss
-#        else:
-#            return self.sl1(torch.zeros(1),torch.zeros(1))
-
 class PTV_estimator_loss(nn.Module):
     '''
     sum of the ROI loss and a loss of the MAE of the dose in the structure masks(SM)
