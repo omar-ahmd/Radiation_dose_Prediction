@@ -526,7 +526,8 @@ class NetworkTrainer:
             self.time.__init__()
             #if self.log.epoch==0:
             #    self.val()
-                
+            
+            #train with adversarial loss
             if self.setting.is_GAN:
                 self.train_GAN()
             else:

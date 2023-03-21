@@ -106,10 +106,6 @@ def train_transform(list_images):
                                    max_shift=20,
                                    list_pad_value=[0, 0, 0, 0])
 
-    #PTVs = list_images[1]
-    #mask = list_images[2][0]
-    #PTVs[-1] = 1*(mask==0)
-    #list_images[1] = PTVs
     list_images = to_tensor(list_images)
 
     return list_images
@@ -221,9 +217,23 @@ def get_loader(dir,
                 train_size=0.9,
                 with_miss_PTVs=True,
                 with_distance=True,
-                PTV_estimate=False):
+                PTV_estimate=False,
+                test=False):
 
+    test_dataset = MyDataset(dir, num_samples_per_epoch=test_num_samples_per_epoch,
+                            phase='test', 
+                            resplit=resplit,  
+                            seed=seed,
+                            train_size=train_size,
+                            with_miss_PTVs=with_miss_PTVs,
+                            with_distance=with_distance,
+                            PTV_estimate=PTV_estimate)
+    test_loader = data.DataLoader(dataset=test_dataset, batch_size=test_bs, shuffle=False, num_workers=num_works,
+                                 pin_memory=False)
+    if test:
+        return test_loader
 
+        
     train_dataset = MyDataset(dir, num_samples_per_epoch=train_num_samples_per_epoch,
                             phase='train', 
                             resplit=resplit, 
@@ -242,20 +252,11 @@ def get_loader(dir,
                             with_miss_PTVs=with_miss_PTVs,
                             with_distance=with_distance,
                             PTV_estimate=PTV_estimate)
-    test_dataset = MyDataset(dir, num_samples_per_epoch=test_num_samples_per_epoch,
-                            phase='test', 
-                            resplit=resplit,  
-                            seed=seed,
-                            train_size=train_size,
-                            with_miss_PTVs=with_miss_PTVs,
-                            with_distance=with_distance,
-                            PTV_estimate=PTV_estimate)
 
     train_loader = data.DataLoader(dataset=train_dataset, batch_size=train_bs, shuffle=True, num_workers=num_works,
                                    pin_memory=False)
     val_loader = data.DataLoader(dataset=val_dataset, batch_size=val_bs, shuffle=False, num_workers=num_works,
                                  pin_memory=False)
-    test_loader = data.DataLoader(dataset=test_dataset, batch_size=test_bs, shuffle=False, num_workers=num_works,
-                                 pin_memory=False)
+    
 
     return train_loader, val_loader, test_loader

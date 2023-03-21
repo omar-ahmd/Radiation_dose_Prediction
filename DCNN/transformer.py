@@ -1,6 +1,6 @@
 # pylint: disable=too-many-arguments
 # pylint: disable=too-many-instance-attributes
-# This code is taken for the UVCGAN project on github
+# This code is taken from the UVCGAN project on github
 # link: https://github.com/LS4GAN/uvcgan
 
 
@@ -59,8 +59,6 @@ def get_activ_layer(activ):
         return nn.Sigmoid()
 
     raise ValueError("Unknown activation: '%s'" % name)
-
-
 
 
 def calc_tokenized_size(image_shape, token_size):

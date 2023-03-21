@@ -4,14 +4,7 @@ import sys
 sys.path.append('./DCNN')
 from transformer import PixelwiseViT
 import torch.nn.functional as F
-
-# Number of channels in the training images. For color images this is 3
-nc = 1
-# Size of z latent vector (i.e. size of generator input)
-nz = 100
-# Size of feature maps in discriminator
-ndf = 128
-
+import numpy as np
 
 
 class SingleConv(nn.Module):
@@ -329,41 +322,32 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
         self.ngpu = ngpu
         self.main = nn.Sequential(
-            # input is (nc) x 128 x 128
-            nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
+            nn.Conv2d(1, 128, 4, 2, 1, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
-            # input is (ndf) x 128 x 128
-            nn.Conv2d(ndf, ndf, 4, 2, 1, bias=False),
+            nn.Conv2d(128, 128, 4, 2, 1, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf) x 32 x 32
-            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ndf * 2),
+            nn.Conv2d(128, 128 * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(128 * 2),
             nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*2) x 16 x 16
-            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ndf * 4),
+            nn.Conv2d(128 * 2, 128 * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(128 * 4),
             nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*4) x 8 x 8
-            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ndf * 8),
+            nn.Conv2d(128 * 4, 128 * 8, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(128 * 8),
             nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*8) x 4 x 4
-            nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
+            nn.Conv2d(128 * 8, 1, 4, 1, 0, bias=False),
             nn.Sigmoid()
         )
 
     def forward(self, input):
         return self.main(input)
 
+
 class Ensemble(nn.Module):
     def __init__(self, models):
         super(Ensemble, self).__init__()
         self.models = models
         self.freeze_models()
-        in_ch = len(models)
-        self.conv = nn.Sequential(
-            SingleConv(in_ch, 1, kernel_size=1, stride=1, padding=0)
-        )
     def freeze_models(self):
         for m in self.models:
             for param in m.parameters():
@@ -373,38 +357,14 @@ class Ensemble(nn.Module):
     def forward(self, input):
         models_outputs = []
         for m in self.models:
-            models_outputs.append(m(input)[0])
+            try:
+                outp = m(input)[0]
+            except:
+                outp = m(input[:,:-1])[0]
+
+            models_outputs.append(outp)
         models_out_concat = torch.cat(models_outputs, axis=1)
-        return torch.mean(models_out_concat, axis=1)
+        return models_out_concat.mean(axis=1)
 
 
 
-class EMA:
-    def __init__(self, beta):
-        super().__init__()
-        self.beta = beta
-        self.step = 0
-
-
-    def update_model_average(self, ma_model, current_model):
-        for current_params, ma_params in zip(current_model.parameters(), ma_model.parameters()):
-            old_weight, up_weight = ma_params.data, current_params.data
-            ma_params.data = self.update_average(old_weight, up_weight)
-
-
-    def update_average(self, old, new):
-        if old is None:
-            return new
-        return old * self.beta + (1 - self.beta) * new
-
-
-    def step_ema(self, ema_model, model, step_start_ema=2000):
-        if self.step < step_start_ema:
-            self.reset_parameters(ema_model, model)
-            self.step += 1
-            return
-        self.update_model_average(ema_model, model)
-        self.step += 1
-
-    def reset_parameters(self, ema_model, model):
-        ema_model.load_state_dict(model.state_dict())

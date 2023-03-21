@@ -5,10 +5,9 @@ import torch.nn as nn
 if os.path.abspath('..') not in sys.path:
     sys.path.insert(0, os.path.abspath('..'))
 import argparse
-sys.path.append('/home/infres/ahmad-21/Master_MVA/DL_MI_project/')
-sys.path.append('/home/infres/ahmad-21/Master_MVA/DL_MI_project/DCNN')
+sys.path.append(os.getcwd())
+sys.path.append(os.getcwd() + '/DCNN')
 import torch
-import copy
 import wandb
 from DataLoader.my_dataloader import get_loader
 from NetworkTrainer.network_trainer import NetworkTrainer
@@ -44,7 +43,7 @@ if __name__ == '__main__':
     parser.add_argument('--split-seed', type=int, default=None,
                         help='training validition split seed')
     parser.add_argument('--without_distance', default=False, action='store_true',
-                        help='add distance transform of the ptvs as input')
+                        help='distance transform of the ptvs as input')
     parser.add_argument('--wandb', default=False, action='store_true',
                         help='weights and biases log')
     parser.add_argument('--train_size', default=0.9,
@@ -56,30 +55,33 @@ if __name__ == '__main__':
     #  Start training
     trainer = NetworkTrainer()
     trainer.setting.project_name = args.model
-    bott=''
-    ptv_estimate=''
+
+    exten=''
     gan='_'
     bott = '_'+args.bottleneck
     if args.PTV_estimate:
-        ptv_estimate='_ptv1'
+        exten='_ptv1'
     if args.without_distance:
-        ptv_estimate='wod'
+        exten='_WD'
     if args.GAN:
         gan='_GAN'
 
     trainer.setting.output_dir = args.output_path + '/' + \
                                     args.model + gan + bott +\
-                                    '_' + args.loss + ptv_estimate
+                                    '_' + args.loss + exten
 
     if not os.path.exists(trainer.setting.output_dir):
         os.mkdir(trainer.setting.output_dir)
     
+
+
     if args.split_seed is None:
         resplit = False
         args.split_seed = -1
     else:
         resplit = True
 
+    #Add result to weights and biases
     if args.wandb:
         # start a new wandb run to track this script
         wandb.init(
@@ -105,6 +107,7 @@ if __name__ == '__main__':
     trainer.set_GPU_device(list_GPU_ids)
     trainer.setting.max_epoch=args.epochs
 
+    #Models input/output
     if args.without_distance:
         in_ch=3
         out_ch=1
@@ -135,46 +138,10 @@ if __name__ == '__main__':
                                         list_ch=[-1, 32, 64, 128, 256], bottleneck=args.bottleneck)
     elif args.model=='DCNN-2ENC-AUTO':
         trainer.setting.network = Model_sep(in_ch=in_ch, out_ch=out_ch,
-                                        list_ch=[-1, 32, 64, 128, 256], bottleneck=args.bottleneck, Unet=False)
-    elif args.model=='ENSEMBLE':
-        paths=['Output/DCNN_Vit_None_L1LOSS/best_val_evaluation_uloss.pkl',
-                'Output/DCNN_Vit_None_ROI_SM_LOSS/best_val_evaluation_uloss.pkl',
-                'Output/DCNN_Vit_None_ROI_LOSS/best_val_evaluation_uloss.pkl',
-                'Output/DCNN_2ENC_None_ROI_LOSS/best_val_evaluation_uloss.pkl',
-                'Output/DCNN_2ENC_None_ROI_SM_LOSS/best_val_evaluation_uloss.pkl',
-                'Output/DCNN_2ENC_None_L1LOSS/best_val_evaluation_uloss.pkl'
-                ]
-        models=[]
-        model1 = Model(in_ch=4, out_ch=1,
-                                        list_ch=[-1, 32, 64, 128, 256], bottleneck='Vit').to(trainer.setting.device)
-        model2 = Model(in_ch=4, out_ch=1,
-                                        list_ch=[-1, 32, 64, 128, 256], bottleneck='Vit').to(trainer.setting.device)
-        model3 = Model(in_ch=4, out_ch=1,
-                                        list_ch=[-1, 32, 64, 128, 256], bottleneck='Vit').to(trainer.setting.device)
-                
-        model4 = Model_sep(in_ch=4, out_ch=1,
-                                        list_ch=[-1, 32, 64, 128, 256]).to(trainer.setting.device)
-        model5 = Model_sep(in_ch=4, out_ch=1,
-                                        list_ch=[-1, 32, 64, 128, 256]).to(trainer.setting.device)
-        model6 = Model_sep(in_ch=4, out_ch=1,
-                                        list_ch=[-1, 32, 64, 128, 256]).to(trainer.setting.device)
+                                        list_ch=[-1, 32, 64, 128, 256], bottleneck=args.bottleneck, Unet=False) 
+    
+    trainer.setting.network.to(trainer.setting.device)
 
-        model1.load_state_dict(torch.load(paths[0])['network_state_dict'])
-        models.append(model1)
-        model2.load_state_dict(torch.load(paths[1])['network_state_dict'])
-        models.append(model2)
-        model3.load_state_dict(torch.load(paths[2])['network_state_dict'])
-        models.append(model3)
-        model4.load_state_dict(torch.load(paths[3])['network_state_dict'])
-        models.append(model4)
-        model5.load_state_dict(torch.load(paths[4])['network_state_dict'])
-        models.append(model5)
-        model6.load_state_dict(torch.load(paths[5])['network_state_dict'])
-        models.append(model6)
-
-        trainer.setting.network = Ensemble(models)
-        total_params  = sum(p.numel() for p in trainer.setting.network.parameters() if p.requires_grad)
-        print(total_params)
 
     #Loss function
     if args.GAN:
@@ -193,17 +160,10 @@ if __name__ == '__main__':
                                             .to(trainer.setting.device))
 
     
-
-    
     
 
-    
 
-    trainer.setting.network.to(trainer.setting.device)
-
-
-    trainer.setting.max_iter = args.max_iter
-
+    #Data loaders
     trainer.setting.train_loader, trainer.setting.val_loader, _ = get_loader('data',
         train_bs=args.batch_size,
         val_bs=1,
@@ -218,6 +178,7 @@ if __name__ == '__main__':
         PTV_estimate=args.PTV_estimate
         )
 
+    trainer.setting.max_iter = args.max_iter
     trainer.setting.eps_train_loss = 0.01
     trainer.setting.lr_scheduler_update_on_iter = True
     trainer.setting.weighted_loss = args.weighted
@@ -240,10 +201,6 @@ if __name__ == '__main__':
                                  'last_epoch': -1
                              }
                              )
-
-    if not os.path.exists(trainer.setting.output_dir):
-        os.mkdir(trainer.setting.output_dir)
     
     trainer.run()
-
     trainer.print_log_to_file('# Done !\n', 'a')
