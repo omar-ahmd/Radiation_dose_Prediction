@@ -29,7 +29,6 @@ def read_data(patient_dir):
 
     return dict_images
 
-
 def pre_processing(dict_images, with_distance=True, PTV_estimate=False):
 
     # CT image
@@ -110,11 +109,9 @@ def train_transform(list_images):
 
     return list_images
 
-
 def val_transform(list_images):
     list_images = to_tensor(list_images)
     return list_images
-
 
 def get_distance_image(mask):
     mask_erode = skimage.morphology.binary_erosion(mask)
@@ -123,6 +120,8 @@ def get_distance_image(mask):
     distance[mask > 0] = -1 * distance[mask > 0]
 
     return distance.astype(np.float)
+
+
 
 
 class MyDataset(data.Dataset):
@@ -196,7 +195,6 @@ class MyDataset(data.Dataset):
                 return {'data' : list_images, 'clas': 0}, case_id
             else:
                 return {'data' : list_images, 'clas': 1}, case_id
-    
 
     def __len__(self):
         return self.num_samples_per_epoch
@@ -204,21 +202,23 @@ class MyDataset(data.Dataset):
 
 
 
-def get_loader(dir,
-                train_bs=1,
-                val_bs=1,
-                test_bs=1,
-                train_num_samples_per_epoch=1, 
-                val_num_samples_per_epoch=1, 
-                test_num_samples_per_epoch=1, 
-                num_works=0, 
-                resplit=True,
-                seed=10,
-                train_size=0.9,
-                with_miss_PTVs=True,
-                with_distance=True,
-                PTV_estimate=False,
-                test=False):
+def get_loader(
+    dir,                            # Directory containing the data files.
+    train_bs=1,                     # Batch size for training data loader.
+    val_bs=1,                       # Batch size for validation data loader.
+    test_bs=1,                      # Batch size for test data loader.
+    train_num_samples_per_epoch=1,  # Number of training samples to use per epoch.
+    val_num_samples_per_epoch=1,    # Number of validation samples to use per epoch.
+    test_num_samples_per_epoch=1,   # Number of test samples to use per epoch.
+    num_works=0,                    # Number of subprocesses to use for data loading.
+    resplit=True,                   # Whether to randomly split data into train/val/test sets on each epoch.
+    seed=10,                        # Random seed used for train/val/test split.
+    train_size=0.9,                 # Proportion of data to use for training if `resplit=True`.
+    with_miss_PTVs=True,            # Whether to include samples with missing PTVs.
+    with_distance=True,             # Whether to include distance data in the samples.
+    PTV_estimate=False,             # Whether to estimate PTV size from OARs.
+    test=False,                     # Whether to return only the test data loader.
+):
 
     test_dataset = MyDataset(dir, num_samples_per_epoch=test_num_samples_per_epoch,
                             phase='test', 
@@ -233,7 +233,7 @@ def get_loader(dir,
     if test:
         return test_loader
 
-        
+
     train_dataset = MyDataset(dir, num_samples_per_epoch=train_num_samples_per_epoch,
                             phase='train', 
                             resplit=resplit, 
