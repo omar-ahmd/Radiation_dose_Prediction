@@ -53,9 +53,11 @@ train file arguments:
 cd <prb_dir>
 $ python3 DCNN/train.py --batch_size 64 --list_GPU_ids 1 --wandb --model DCNN --bottleneck Vit  --epochs 40 --iter-per-epoch 1000 --loss ROI_SM
 ```
-You can find the weighths of the models in [Weights](https://drive.google.com/file/d/1RGprRPdZqKoyj25Q5xivuKBKIyflnz2P/view?usp=share_link), to read any model you just need to use the arguments given below and put the weights in 'Output/' directory
+
 
 # Test
+You can find the weighths of the models in [Weights](https://drive.google.com/file/d/1RGprRPdZqKoyj25Q5xivuKBKIyflnz2P/view?usp=share_link), to read any model you just need to use the arguments given below and put the weights in 'Output/' directory
+
 tes file arguments:
 - **model**: Specifies which model to use for training. The default value is 'DCNN', but it can also be set to 'AUTOENC' or 'DCNN_2ENC', or 'ENSEMBLE'.
 - **GAN**: A boolean flag that indicates whether to train the model using GAN loss or not. By default, this flag is set to False.
