@@ -518,4 +518,4 @@ class Ensemble(nn.Module):
 
             models_outputs.append(outp)
         models_out_concat = torch.cat(models_outputs, axis=1)
-        return models_out_concat.mean(axis=1)
+        return [models_out_concat.mean(axis=1)[:,None]]

@@ -9,6 +9,7 @@ import argparse
 
 sys.path.append(os.getcwd())
 sys.path.append(os.getcwd() + "/DCNN")
+from DCNN.loss import L1Loss
 import torch
 from DataLoader.my_dataloader import get_loader
 from model import Model, Model_sep, Ensemble
@@ -23,8 +24,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--GAN", default=False, action="store_true", help="Train with gan loss"
     )
-    parser.add_argument("--bottleneck", default="DFA", help="DFA, Vit, None")
-    parser.add_argument("--loss", default="ROI", help="ROI, ROI_SM, L1")
+    parser.add_argument("--bottleneck", default="DFA", help="DFA, Vit, NONE")
+    parser.add_argument("--loss", default="ROI_SM", help="ROI, ROI_SM, L1")
     parser.add_argument(
         "--weighted",
         default=False,
@@ -61,15 +62,10 @@ if __name__ == "__main__":
             "Model does not exist, you can train a model under these settings"
         )
     else:
-        predicted_test = out_dir + "/output1"
+        predicted_test = out_dir + "/output"
         if not os.path.exists(predicted_test):
             os.mkdir(predicted_test)
 
-    if args.split_seed is None:
-        resplit = False
-        args.split_seed = -1
-    else:
-        resplit = True
 
     # Models input/output
     if args.without_distance:
@@ -78,12 +74,12 @@ if __name__ == "__main__":
     else:
         in_ch = 4
         out_ch = 1
-
+    print(out_dir)
     model_PATH = out_dir + "/best_val_evaluation_uloss.pkl"
 
     # Models
     if args.model == "AUTOENC":
-        model = Model(
+        model1 = Model(
             in_ch=in_ch,
             out_ch=out_ch,
             list_ch=[-1, 32, 64, 128, 256],
@@ -91,31 +87,39 @@ if __name__ == "__main__":
             bottleneck=args.bottleneck,
             with_dropout=False,
         )
+        model1.load_state_dict(torch.load(model_PATH)["network_state_dict"])
+        model2 = model1
     elif args.model == "DCNN":
-        model = Model(
+        model1 = Model(
             in_ch=in_ch,
             out_ch=out_ch,
             list_ch=[-1, 32, 64, 128, 256],
             bottleneck=args.bottleneck,
             with_dropout=False,
         )
-
+        model1.load_state_dict(torch.load(model_PATH)["network_state_dict"])
+        model2 = model1
+        
         args.model = args.model + "_" + args.bottleneck
     elif args.model == "DCNN_2ENC":
-        model = Model_sep(
+        model1 = Model_sep(
             in_ch=in_ch,
             out_ch=out_ch,
             list_ch=[-1, 32, 64, 128, 256],
             bottleneck=args.bottleneck,
         )
+        model1.load_state_dict(torch.load(model_PATH)["network_state_dict"])
+        model2 = model1
     elif args.model == "DCNN_2ENC_AUTO":
-        model = Model_sep(
+        model1 = Model_sep(
             in_ch=in_ch,
             out_ch=out_ch,
             list_ch=[-1, 32, 64, 128, 256],
             bottleneck=args.bottleneck,
             Unet=False,
         )
+        model1.load_state_dict(torch.load(model_PATH)["network_state_dict"])
+        model2 = model1
     elif args.model == "ENSEMBLE":
         paths = [
             "Output/DCNN__DFA_ROI_SM/best_val_evaluation_uloss.pkl",
@@ -154,6 +158,9 @@ if __name__ == "__main__":
         model2 = Ensemble([models[4],models[5]])
     else:
         raise Exception("Model does not exist")
+    
+    model1 = model1.eval()
+    model2 = model2.eval()
 
     # Data loader
     test_loader = get_loader(
@@ -166,16 +173,19 @@ if __name__ == "__main__":
         test=True,
     )
 
+
     for batch_idx, list_loader_output in tqdm(enumerate(test_loader)):
         path = list_loader_output[1][0]
         input_ = list_loader_output[0][0]
         target = list_loader_output[0][1][0, 0]
         mask = list_loader_output[0][2][0][0]
         if input_[0][0].sum() != 0:
-            output = model1(input_)
-            img_pred = (output[0] * mask).detach().numpy()
+            output = model1(input_)[0]
+            img_pred = (output * mask).detach().numpy()
         else:
-            output = model2(input_)
-            img_pred = (output[0] * mask).detach().numpy()
+            output = model2(input_)[0]
+            img_pred = (output * mask).detach().numpy()
 
         np.save(predicted_test + "/" + path.split("/")[-1], img_pred)
+
+  
