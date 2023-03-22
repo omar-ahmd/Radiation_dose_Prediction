@@ -1,6 +1,6 @@
 #   DiffsuionDet for object tracking
 This code is based on the implementation of [RTDosePrediction](https://https://github.com/LSL000UD/), 
-The main contribution of this work is to use various variations of the DCNN proposes in the aforementioned repository, such as bottelneck, 2encoders, new loss function, and finally an ensemble of various DCNN-based models.
+The main contribution of this work is to use various variations of the DCNN proposed in the aforementioned repository, such as bottelneck, 2encoders, new loss function, and finally an ensemble of various DCNN-based models.
 
 # Data Preparation
 Download 2D [openkbp](https://codalab.lisn.upsaclay.fr/my/datasets/download/d10c84c1-7824-4a9f-8693-fc3f79c759ce). And put them in the following structure:
@@ -32,6 +32,7 @@ Download 2D [openkbp](https://codalab.lisn.upsaclay.fr/my/datasets/download/d10c
 # Train
 Single GPU training
 
+
 train file arguments:
 - **model**: Specifies which model to use for training. The default value is 'DCNN', but it can also be set to 'AUTOENC' or 'DCNN_2ENC'.
 - **GAN**: A boolean flag that indicates whether to train the model using GAN loss or not. By default, this flag is set to False.
@@ -52,6 +53,7 @@ train file arguments:
 cd <prb_dir>
 $ python3 DCNN/train.py --batch_size 64 --list_GPU_ids 1 --wandb --model DCNN --bottleneck Vit  --epochs 40 --iter-per-epoch 1000 --loss ROI_SM
 ```
+You can find the weighths of the models in [Weights](https://drive.google.com/file/d/1RGprRPdZqKoyj25Q5xivuKBKIyflnz2P/view?usp=share_link), to read any model you just need to use the arguments given below and put the weights in 'Output/' directory
 
 # Test
 tes file arguments:
