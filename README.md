@@ -1,4 +1,4 @@
-#   DiffsuionDet for object tracking
+#  Radiation dose prediction
 This code is based on the implementation of [RTDosePrediction](https://https://github.com/LSL000UD/), 
 The main contribution of this work is to use various variations of the DCNN proposed in the aforementioned repository, such as bottelneck, 2encoders, new loss function, and finally an ensemble of various DCNN-based models.
 
